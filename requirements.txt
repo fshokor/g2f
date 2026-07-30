@@ -1,0 +1,10 @@
+numpy
+pandas
+scikit-learn
+scikit-allel
+cyvcf2
+torch
+matplotlib
+seaborn
+jupyter
+nbconvert

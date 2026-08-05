@@ -31,11 +31,11 @@ prediction are two separate things -- both get checked.
 
 - [x] Project scoped, dataset selected (G2F)
 - [x] Repo scaffolded
-- [ ] 2022 competition dataset downloaded and inspected against readme
-- [ ] Genotype representation decided
-- [ ] Environment representation decided
-- [ ] Train/test split scheme decided (leave-one-environment-out vs.
-      leave-one-year-out vs. other)
+- [x] 2024/2025 competition dataset downloaded (train 2014-2023 + test 2024)
+      and audited via 00_data_setup_and_exploration.ipynb
+- [x] Genotype representation decided -- see SESSION_MEMORY.md
+- [x] Environment representation decided -- see SESSION_MEMORY.md
+- [x] Train/test split scheme decided -- see SESSION_MEMORY.md
 - [ ] Genotype-alone baseline built
 - [ ] Environment-alone baseline built
 - [ ] Diagnostic/orthogonalization layer built

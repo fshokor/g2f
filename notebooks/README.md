@@ -5,8 +5,7 @@ synthetic data before being considered done.
 
 | # | Notebook | Purpose |
 |---|---|---|
-| 00 | `00_data_setup` | Load and sanity-check genotype/phenotype/weather/soil data against the README |
-| 01 | `01_data_exploration` | Understand structure, coverage, missingness |
+| 00 | `00_data_setup_and_exploration` | Load and sanity-check genotype/phenotype/weather/soil data against the README, Understand structure, coverage, missingness |
 | 02 | `02_effect_representations` | Build genotype and environment representations for the effect-alone models |
 | 03 | `03_genotype_model` | Genotype-alone predictor + baseline |
 | 04 | `04_environment_model` | Environment-alone predictor + baseline |

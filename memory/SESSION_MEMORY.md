@@ -43,16 +43,11 @@ added here as they come up in Phase 2+.)
   leave-one-year-out CV within the 2014-2023 training years for model
   selection / hyperparameter tuning before touching the 2024 holdout.
 
-## Known risks / open items to check later
+## Resolved risks
 
-- Parent inbreds were genotyped across 8 different cohorts/technologies
-  (GBS 2014-2017, WGS 2018-2019, Exome 2020-2021, WGS 2024-2025, etc.).
-  The hybrid genotype matrix looks standardized to the common 2,425-marker
-  panel, so this is background provenance for now -- but worth checking if
-  genotype-environment correlation shows up unexpectedly (e.g. genotyping
-  cohort clustering with trial year).
-- Test-side environment counts don't fully line up: submission_template /
-  test_meta / test_weather all show 23 environments, but test_ec shows 22
-  and test_observed (actual ground truth) shows 22. One environment in the
-  prediction target doesn't have a matching observed value -- pin down
-  which one before writing evaluation code that assumes a clean 1:1 join.
+- Environment count mismatch (23 vs. 22) between submission_template and
+  test_observed: confirmed as a genuine single-environment gap, not a data
+  artifact. SCH1_2024 (385 rows) appears only in submission_template --
+  organizers are withholding its ground truth for their own scoring.
+  Evaluation code must exclude SCH1_2024 from local metric computation
+  while still producing predictions for it.

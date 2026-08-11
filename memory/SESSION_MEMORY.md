@@ -1,142 +1,189 @@
-# Session Memory
+# Session Memory -- G2F Effect-Decomposition Framework
 
-## Project
+Narrative record of decisions and why they were made. See `PROGRESS.md` for
+status and `NEXT_SESSION.md` for what to pick up next.
 
-G2F Effect-Decomposition Framework: train separate genotype-alone and
-environment-alone models, study the relationship between their per-effect
-"votes" via a diagnostic/orthogonalization layer (accounting for the risk
-that genotype and environment are correlated -- certain hybrids
-disproportionately tested in certain environments), then build a fusion
-model evaluated on held-out data. Spun out of a prior multiomics project
-where naive fusion of correlated layers rarely improved prediction due to
-confounds rather than genuine complementary signal.
+## Framework recap
 
-Dataset: G2F 2024/2025 GxE Prediction Competition (CyVerse Data Commons).
-Maize grain yield, 2014-2023 train / 2024 test, genotype (VCF + numerical
-dosage matrix), weather (NASA POWER), soil, environmental covariates (EC),
-metadata.
+Hypothesis: training separate genotype-alone and environment-alone models,
+studying the relationship between their per-effect "votes" via a
+diagnostic/orthogonalization layer, and only then fusing them, produces more
+principled and interpretable maize grain yield predictions than naive data
+integration. Motivated directly by a prior multiomics project (RNA-protein
+fusion) where naive fusion of correlated layers consistently failed to beat
+the stronger single modality, and apparent "coupling" often turned out to be
+a confound (cell-type composition, tissue-of-origin) rather than genuine
+complementary signal. Dataset: G2F 2024/2025 GxE Competition (CyVerse),
+2014-2023 training environments, 2024 held-out test set.
 
-## Confirmed decisions
+## Phase 1 -- Data audit (`00_data_setup_and_exploration.ipynb`, finalized)
 
-### Genotype representation
-Raw dosage matrix (5,899 hybrids x 2,425 markers, {0, 0.5, 1}) as direct
-input to the genotype-alone deep model, with a GBLUP/kinship baseline built
-alongside it.
+Genotype matrix: 5,899 hybrids x 2,425 markers, raw `{0, 0.5, 1}` dosage
+format, `NA` for missing calls, not full rank, minimally filtered (README
+warns of known errors). Weather (NASA POWER, daily): complete for core
+variables, cleanest table in the dataset. Soil: absent for ~30% of
+environments, and even where present, many chemistry fields (esp. trace
+micronutrients) are ~90-98% missing. Metadata "Issue/comment" free-text
+fields are heavily missing (>90%) but core identifying fields (Env, Year)
+are complete. Target `Yield_Mg_ha` is ~5.2% missing in training (partly
+intentional QC nulling per the README), 100% missing in the submission
+template (to be predicted), fully present in the true 2024 holdout.
 
-**Target definition (confirmed after discussion):** per-hybrid marginal
-mean yield across all environments that hybrid was tested in -- i.e. a
-single fixed value per hybrid, not a per-plot or per-(Env,Hybrid) target.
-This mirrors the classical quantitative-genetics G x E main-effects
-decomposition (genotype main effect + environment main effect + G x E
-interaction), keeps the genotype-alone and environment-alone models
-symmetric, and deliberately does NOT pre-correct for the genotype x
-environment confound -- that correction is Phase 3's job (orthogonalization
-layer), not something to bake into the target upfront.
+## Phase 2 -- Effect representations (`01_effect_representations.ipynb`, finalized)
 
-**Reliability:** per-hybrid n_envs_tested is highly skewed (real-data
-result from `01_effect_representations.ipynb`: median 17, mean 21.6, max
-259 -- one hybrid, almost certainly a repeatedly-used local check/reference,
-tested in nearly every environment). This confirms loss-weighting (or
-relying on GBLUP's kinship-based shrinkage) is a real requirement for the
-genotype-alone model, not a nice-to-have. Must be decided explicitly in
-`03_genotype_model.ipynb`.
+**Genotype representation:** raw `{0, 0.5, 1}` dosage, no standardization at
+this stage (standardization decision revisited per-model in `03`).
 
-**Fold-safety requirement:** the per-hybrid mean saved by
-`01_effect_representations.ipynb` is computed from the full training set
-and is exploratory-only. The model notebook must recompute it per CV fold
-using only that fold's training-year environments, or held-out-year
-information leaks into the "fixed" genotype value being predicted.
+**Environment representation, locked:** engineered weather indices (GDD sum,
+heat-stress days, temperature/precip/solar/humidity/wind/soil-moisture
+summaries -- column-pattern-matched, not hardcoded to exact NASA POWER
+column names) + soil (median-imputed, `has_soil_data` flag) + latitude/
+longitude. City labels excluded (identified as a downstream location proxy
+that could leak). EC (673 crop-model covariates) deliberately deferred --
+overlaps substantially with the hand-engineered weather features and is a
+dimensionality problem at ~270 environments.
 
-### Environment representation
-**Weather** (engineered indices, Option B -- confirmed over raw daily
-sequences to keep the genotype-alone and environment-alone models
-architecturally symmetric, both flat-vector inputs): GDD sum, tmax
-mean/max, tmin mean, heat-stress day count, precip sum/max daily, solar
-mean, humidity mean, windspeed mean, a weather-derived soil-moisture proxy,
-season length. Column names auto-detected by pattern from the real NASA
-POWER-style file (`T2M_MAX`, `T2M_MIN`, `T2M`, `PRECTOTCORR`,
-`ALLSKY_SFC_SW_DWN`, `RH2M`, `WS2M`, `GWETTOP` confirmed as the real matches
-via `01_effect_representations.ipynb`).
+**TXH2_2015/2016/2017 confirmed as a genuine three-year weather gap** --
+1,223 trait rows requiring explicit exclusion from environment-alone
+modeling. Detected generically (target-but-no-weather set difference) in
+`04`/`05` rather than hardcoded, so it stays correct if a future data
+release changes the gap. TXH1 treatment-suffixed Env names confirmed
+consistent across files (no join-key surprises there).
 
-**Soil**: included, imputed (median, exploratory/global in the
-representation notebook -- must be refit per train fold in the model
-notebook), with a `has_soil_data` binary flag. Real-data result: soil
-present for 186/272 train envs; after column-level filtering (>50% missing
-across envs dropped -- removes trace micronutrients Zn/Fe/Mn/Cu/B and BpH,
-consistent with the Phase 1 audit), 24 of 30 numeric soil columns kept.
+## Phase 3a -- Genotype-alone model (`03_genotype_model.ipynb`, finalized)
 
-Individual soil correlations with env_mean_yield are real but modest
-(strongest: `E Depth` -0.25, `Organic Matter LOI %` +0.24, `Magnesium`
-+0.21) -- weaker than weather's top correlates (~0.3-0.4). **Caveat:**
-`has_soil_data` itself correlates with yield (+0.18), suggesting a possible
-confound where better-resourced/more-established trial sites both collect
-more soil data and yield higher -- soil's correlation may be partly proxying
-this rather than being purely causal soil chemistry. Worth remembering
-during Phase 3 diagnostics.
+Target: per-hybrid marginal mean yield, reliability-weighted by (capped)
+`n_envs_tested`. Five variants compared via leave-one-year-out CV (5
+evenly-spaced years): GBLUP (VanRaden kinship kernel ridge), MLP-1
+group-lasso, MLP-2 group-lasso, MLP-2 L2, MLP-2 no-reg. **GBLUP selected as
+final** (alpha=0.1) despite `mlp2_sparse` edging it out on median CV val_r --
+GBLUP generalized best to the true 2024 holdout, which is what actually
+matters. Final numbers: train pearson_r=0.848, **test pearson_r=0.229**
+(hybrid-level, true 2024 holdout).
 
-**Location (latitude/longitude)**: included. Real column names are
-`Weather_Station_Latitude (in decimal numbers NOT DMS)` and the longitude
-equivalent, matched by pattern. Latitude correlates with env_mean_yield at
-+0.37 -- nearly as strong as top weather features, and appears to carry
-information not fully captured by the engineered weather indices (northern
-vs. southern Corn Belt climatic gradient).
+Key learnings: group lasso (column L2-norm proximal soft-thresholding, not
+elementwise L1) needed for real sparsity; SGD+momentum+clipping required for
+group-lasso variants (Adam's adaptive scaling fights proximal steps);
+weighted MSE must be `sum(w*e^2)/sum(w)` not `.mean()`; one-standard-error
+rule favors sparsity over pure accuracy in lambda selection; GBLUP needs an
+explicit mean-offset wrapper since the kinship kernel is inherently
+mean-centered.
 
-**City**: explicitly EXCLUDED from the environment feature vector. City
-shows the largest raw yield spread of anything examined (city medians
-range roughly 5-6 Mg/ha at the low end to 13-14 Mg/ha at the high end), but
-per the user's judgment, City is treated as *defined by* the other
-weather/soil/location features rather than an independent input -- and
-raw City is high-cardinality (~40 levels across 272 environments) relative
-to sample size, a real overfitting risk for the GBLUP-style linear
-baseline in particular. If lat/long + weather + soil don't end up
-capturing enough of the City-level gap, a learned City embedding is a
-candidate follow-up for the deep model specifically (not the baseline).
+## Phase 3b -- Environment-alone model (`04_environment_model.ipynb`, finalized)
 
-**EC (673 crop-model covariates)**: deliberately deferred, not included in
-Phase 2. Substantial conceptual overlap with the hand-engineered weather
-features; 673 columns for ~270 environments is a dimensionality problem
-better addressed as a documented follow-up (e.g. PCA-reduced EC block)
-once the effect-decomposition framework is validated on the simpler
-representation.
+Target: per-environment marginal mean yield, reliability-weighted by
+`n_hybrids_tested`. Two variants (deliberately not `03`'s 5-variant
+structure -- ~35-40 curated features and ~270 environments is a very
+different scale than 2,425 markers/~4,900 hybrids, so group-lasso sparsity
+and wide MLPs aren't well-motivated here): **EBLUP** (linear kernel on
+standardized covariates, direct structural analog of GBLUP) vs
+**env_mlp_l2** (single 24-unit hidden layer, L2 only). CV: full 10-fold
+leave-one-year-out (cheap here, so no subsampling needed).
 
-**Final environment feature vector:** weather (engineered) + soil (imputed
-+ has_soil_data flag) + latitude/longitude. Saved as
-`environment_combined_features.csv`. City and EC excluded from Phase 2.
+**env_mlp_l2 (lambda=1.0) selected as final** -- hand-picked over the
+CV-auto-selected lambda=0.1 (median val_r 0.487 vs 0.491, within noise of
+each other in CV; 1.0 won clearly on the true holdout). Final numbers:
+train pearson_r=0.630, **test pearson_r=0.470** (env-level, true 2024
+holdout) vs EBLUP's test pearson_r=0.255 -- confirms real, meaningful
+nonlinearity in weather/soil -> yield.
 
-### Train/test split scheme
-CyVerse's native 2014-2023 (train) / 2024 (test) partition as the held-out
-evaluation set (confirmed zero environment overlap, all 1,063 test hybrids
-have genotype coverage). Leave-one-year-out CV within training years for
-model selection.
+Bug found+fixed during development: a fold's train-only soil median (or the
+weather-to-meta Env join) can come out `NaN` -- either a sparsely-measured
+soil field whose few real values all fall inside the held-out year, or an
+Env present in the weather file but absent from `meta_df` (join-key
+mismatches are an explicitly known risk per the project brief). Fixed with
+`impute_remaining_nan` (global-median fallback, prints what it touched) plus
+reindexing every feature piece to the weather-covered universe before
+`pd.concat` (was silently pulling gap-year environments into the table via
+outer-join and inflating the NaN diagnostic).
 
-## Resolved risks
+## Phase 4 -- Effect relationships (`05_effect_relationships.ipynb`, first look, in progress)
 
-- **Submission template / test_observed environment mismatch (23 vs. 22):**
-  confirmed as a genuine single-environment gap, not a data artifact.
-  `SCH1_2024` (385 rows) appears only in submission_template -- organizers
-  are withholding its ground truth for their own scoring. Evaluation code
-  must exclude SCH1_2024 from local metric computation while still
-  producing predictions for it.
+Strategy (as discussed): `pheno = a*genetic_value + b*environment_value +
+bias` as a fusion baseline, where `genetic_value` = GBLUP's prediction and
+`environment_value` = env_mlp_l2's prediction; a confound-audit pair of small
+MLPs (`genetic_value <-> environment_value`, single hidden layer, ~8 units,
+since both are already scalars -- interpretability matters more than
+capacity for a diagnostic layer); and a third model `h(environment_value) ->
+pheno` to find environment_value's functional-form relationship to true
+phenotype, then splice `h()` into the fusion formula in place of the plain
+linear term.
 
-- **TXH2_2015/2016/2017 missing from weather file:** confirmed as a
-  genuine structural gap (TXH2 has weather data for every other year,
-  2014/2018-2023, but not these three) -- not a join-key or formatting
-  issue. These 3 environments (1,223 trait rows, 0.75% of
-  genotype-covered trait data) are EXCLUDED from environment-alone
-  modeling. `env_targets_modelable` (269 environments) is the version to
-  use going forward, not the full 272-row `env_targets`.
+**Granularity: Hybrid x Env cell mean** (not raw plot-level) -- matches
+classical G x E specification, avoids replicate-count pseudoreplication.
 
-- **TXH1 treatment-suffixed environments (false alarm, resolved):** weather
-  file has `TXH1-Dry_2017`, `TXH1-Early_2017`, `TXH1-Late_2017`, and 2018
-  equivalents (6 total) instead of plain `TXH1_2017`/`TXH1_2018`. Checked
-  whether trait/soil/meta silently used the plain form instead (which would
-  mean a silent misjoin) -- they don't: trait and meta both already use the
-  same suffixed names as weather, so the existing plain string-match join
-  was already correct by construction. Soil has no suffixed entries for
-  these 6 (soil not collected at that granularity), which is exactly what
-  the `has_soil_data` flag is for -- no fix needed.
+**Currently in-sample, no CV** (explicit choice, "first look" scope) --
+`genetic_value`/`environment_value` are each model's final, fully-fit
+prediction on its own training data, not out-of-fold. This is the single
+biggest caveat on everything below.
 
-## Open risks (not yet investigated)
+### Results (in-sample train + true 2024 holdout test)
+
+- **Confound check**: Pearson r(genetic_value, environment_value) = 0.230
+  across 106,037 observed Hybrid x Env cells -- a real but modest,
+  essentially **linear** relationship (cross-prediction MLPs barely beat
+  plain correlation: 0.236 and 0.231 vs 0.230 baseline). Consistent with
+  better-genetics hybrids being systematically promoted to
+  higher-environment_value trial sites -- a real, mild design confound to
+  keep in mind, not something to over-interpret as biological synergy.
+- **h() functional-form check**: MLP r=0.515 vs linear baseline r=0.514 --
+  no real curvature. env_mlp_l2's output is already well-calibrated in
+  *shape* against true phenotype. Splicing `h()` into fusion added nothing
+  measurable (baseline vs h-spliced fusion pearson_r 0.5677 vs 0.5678
+  in-sample, functionally identical) -- the h-spliced path is likely
+  droppable going forward in favor of the simpler plain-linear fusion.
+- **True 2024 holdout, Hybrid x Env cell level:**
+
+  | formula | pearson_r | rmse |
+  |---|---|---|
+  | genetic_value alone | 0.116 | 3.032 |
+  | environment_value alone | 0.261 | **2.949** |
+  | baseline fusion (linear) | **0.284** | 3.098 |
+  | improved fusion (h-spliced) | 0.265 | 3.167 |
+
+  **Naive linear fusion is not yet clearly beating environment_value alone**
+  -- correlation ticks up slightly but RMSE gets worse, meaning fusion's
+  cell ranking improved marginally while its predicted magnitudes drifted
+  further from true yield (likely `genetic_value`'s large fitted weight
+  (a=0.729) injecting miscalibrated signal, given its own test r is only
+  0.116). This echoes the same "naive fusion underperforms the stronger
+  single effect" failure mode the whole framework was built to diagnose --
+  a real result worth taking seriously, not a formality to wave past.
+
+  Also worth noting: both effects' test correlations drop substantially at
+  the cell level vs. their own solo tests (genetic_value 0.229 -> 0.116;
+  environment_value 0.470 -> 0.261) -- expected, not a bug, since each
+  model's solo test benefited from averaging away the other effect's
+  variation, while cell-level pheno still has G x E interaction and plot
+  noise in it.
+
+Bug found+fixed during development: `env_mlp_l2`'s refit was accidentally
+trained with hyperparameters sized for the small scalar relationship models
+(`batch_size=256` on a ~269-row dataset, few epochs) -- collapsed each epoch
+to ~1 gradient update, producing a near-random `environment_value` (in-sample
+train r went *negative*) that silently broke every downstream number in that
+run. Fixed by strictly separating `ENV_*` (must match `04` exactly: batch
+32, 300 epochs, patience 30, lr 1e-3) from `REL_*` (relationship-model-only)
+hyperparameter namespaces, and added `check_refit_matches_source()`, which
+warns loudly if any refit's in-sample fit diverges from the source
+notebook's own reported number -- a general safeguard against this class of
+bug recurring, not just a one-off patch.
+
+### Open question for the next session
+
+Is genotype's weak cell-level showing (test r=0.116) a real finding, or an
+artifact of `genetic_value`/`environment_value` still being in-sample
+(potentially overfit to 2014-2023, inflating both the confound correlation
+and the fusion coefficients beyond what truly generalizes)? Not resolvable
+without the out-of-fold rebuild -- see `NEXT_SESSION.md`.
+
+## Standing open items (not yet addressed)
 
 - Parent inbred genotyping cohort heterogeneity (GBS, WGS, Exome, Assembly
-  across 2014-2025) as a potential confound in the genotype representation.
+  across different year ranges, per `key_inbreds_G2F_2014-2025.txt`) as a
+  potential confound for the genotype model -- flagged early, not yet
+  investigated.
+- Test-side environment count mismatch (submission template: 23
+  environments; `7_Testing_Observed_Values.csv`: 22) -- handled ad hoc via
+  generic intersection logic in `04` and `05` (prints whatever gets
+  dropped), but not yet written up as a resolved/documented decision.

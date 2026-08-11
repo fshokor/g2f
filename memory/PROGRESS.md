@@ -1,51 +1,66 @@
-# Progress
+# Progress -- G2F Effect-Decomposition Framework
 
-## Status
+## Phase 1 -- Data audit
+**Status: Done.** `00_data_setup_and_exploration.ipynb`.
 
-- [x] Project scoped, dataset selected (G2F)
-- [x] Repo scaffolded
-- [x] 2024/2025 competition dataset downloaded (train 2014-2023 + test 2024)
-      and audited via `00_data_setup_and_exploration.ipynb`
-- [x] Genotype representation decided -- see SESSION_MEMORY.md
-- [x] Environment representation decided -- see SESSION_MEMORY.md
-- [x] Train/test split scheme decided -- see SESSION_MEMORY.md
-- [x] Genotype and environment representations built and explored via
-      `01_effect_representations.ipynb` (real data run): per-hybrid and
-      per-environment marginal targets, engineered weather features, soil
-      (filtered + imputed + has_soil_data flag), latitude/longitude. City
-      and EC excluded by design. TXH2_2015-2017 excluded from
-      environment-alone modeling (no weather record).
-- [ ] Genotype-alone baseline built
-- [ ] Environment-alone baseline built
-- [ ] Diagnostic/orthogonalization layer built
-- [ ] Fusion model built and evaluated on held-out data
+## Phase 2 -- Effect representations
+**Status: Done.** `01_effect_representations.ipynb`. Environment feature
+vector locked (weather + soil + lat/long, city excluded, EC deferred).
 
-## Notebooks
+## Phase 3a -- Genotype-alone model
+**Status: Done.** `03_genotype_model.ipynb`. GBLUP selected as final
+(alpha=0.1). Test pearson_r=0.229 (hybrid-level, true 2024 holdout).
 
-- `00_data_setup_and_exploration.ipynb` -- Phase 1 data audit (integrity
-  checks, profiling, env join-key audit)
-- `01_effect_representations.ipynb` -- genotype/environment representation
-  building + exploratory analysis of which environment features carry
-  yield signal (Section 3: correlations, City/Year boxplots, joint PCA,
-  K-means clustering). Run against real data; outputs saved to
-  `data/processed/`.
-- `03_genotype_model.ipynb` -- not yet started (next up)
-- `04_environment_model.ipynb` -- not yet started
+## Phase 3b -- Environment-alone model
+**Status: Done.** `04_environment_model.ipynb`. env_mlp_l2 selected as final
+(lambda=1.0, hand-picked). Test pearson_r=0.470 (env-level, true 2024
+holdout).
 
-## Key real-data findings worth remembering
+## Phase 4 -- Effect relationships / diagnostic layer
+**Status: In progress -- first look complete, in-sample only.**
+`05_effect_relationships.ipynb`.
 
-- Genotype reliability (n_envs_tested per hybrid) is heavily skewed:
-  median 17, mean 21.6, max 259 -- loss-weighting is a real requirement,
-  not optional polish.
-- Weather correlations with env_mean_yield are agronomically sensible:
-  heat/GDD-related features all negatively correlated with yield (~0.3-0.4
-  magnitude), as expected.
-- Latitude correlates with env_mean_yield almost as strongly as weather
-  (+0.37) and isn't fully redundant with the engineered weather indices.
-- Soil correlations are real but modest (~0.2-0.25); `has_soil_data` itself
-  correlates with yield (+0.18), a possible site-quality confound to keep
-  in mind for Phase 3.
-- City shows the largest raw yield spread of any environment attribute
-  examined (~2x between lowest- and highest-median cities) but was
-  excluded from the feature vector as high-cardinality and
-  downstream-of-other-features by design decision.
+Done:
+- [x] Hybrid x Env cell-mean join table (genetic_value + environment_value + pheno)
+- [x] Confound check (genetic_value vs environment_value): r=0.230, linear
+- [x] Cross-prediction MLP pair (genetic_value <-> environment_value)
+- [x] h() functional-form check (environment_value -> pheno): no curvature found
+- [x] Linear fusion baseline + h-spliced variant, both evaluated in-sample and on true 2024 holdout
+
+Not done:
+- [ ] Rebuild `genetic_value`/`environment_value` as leave-one-year-out
+      out-of-fold predictions (currently in-sample final-model refits --
+      the single biggest caveat on every number above)
+- [ ] Re-run confound check / h() / fusion with OOF values
+- [ ] Resolve whether genotype's weak cell-level test showing (r=0.116) is
+      real or an in-sample-overfitting artifact
+- [ ] Decide whether to keep the h-spliced fusion path (added ~nothing
+      in-sample) or drop it in favor of plain linear fusion
+
+## Phase 5 -- Fusion model (final)
+**Status: Not started.** Blocked on Phase 4's OOF rebuild -- current linear
+fusion is a first-look baseline, not a validated final model. Current
+signal: naive linear fusion is not yet clearly beating environment_value
+alone on the true holdout (better pearson_r, worse RMSE) -- needs
+investigation before any fusion architecture is treated as "the" model.
+
+## Standing open items (not phase-blocking, not yet addressed)
+- [ ] Parent inbred genotyping cohort heterogeneity (GBS/WGS/Exome/Assembly)
+      as a potential genotype-model confound
+- [ ] Formal write-up of the 23-vs-22 test environment count mismatch
+      resolution (currently handled ad hoc, generically, in `04`/`05`)
+
+## File inventory
+- `notebooks/00_data_setup_and_exploration.ipynb` -- done
+- `notebooks/01_effect_representations.ipynb` -- done
+- `notebooks/03_genotype_model.ipynb` -- done
+- `notebooks/04_environment_model.ipynb` -- done
+- `notebooks/05_effect_relationships.ipynb` -- in progress (first look done, OOF rebuild pending)
+- `scripts/genotype_models.py` -- VanRaden kinship kernel, genotype MLP variants
+- `scripts/environment_models.py` -- weather/soil feature engineering, env kernel, env MLP
+- `scripts/relationship_models.py` -- small scalar-relationship MLP (Phase 4)
+- `scripts/training.py` -- effect-agnostic: `reliability_weights`, `make_loader`, `fit_mlp`, `fit_mlp_adam`, `fit_gblup`, `GBLUPModel`
+- `scripts/evaluation.py` -- effect-agnostic: `evaluate_predictions`, `effective_markers`
+- `results/genotype_model/` -- `03`'s CV fold results, comparison tables
+- `results/environment_model/` -- `04`'s CV fold results, comparison tables
+- `results/effect_relationships/` -- `05`'s cell-mean tables (train + test) and fusion comparison tables

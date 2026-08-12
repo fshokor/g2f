@@ -59,5 +59,33 @@ class ScalarMLP:
 def scalar_l2_penalty(model, lam: float):
     """L2 penalty on the first (input) linear layer's weights only --
     same layer-scoping convention as environment_models.env_l2_penalty.
+    Shape-agnostic (sums over all input columns), so this also covers the
+    2-input interaction MLP below without change.
     """
     return lam * (model.net[0].weight ** 2).sum()
+
+
+def vector_feature_mean_std(X_train: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Column-wise train-only mean/std, for standardizing `genetic_value`
+    and `environment_value` together before either an explicit interaction
+    term or GxEInteractionMLP. Generalizes scalar_feature_mean_std (which
+    only ever handled one column) so both inputs share a single call rather
+    than two independent scalar ones that could silently drift out of sync
+    (e.g. one fit on train, one accidentally refit on train+test).
+    """
+    mean = X_train.mean(axis=0)
+    std = X_train.std(axis=0)
+    std = np.where(std > 0, std, 1.0)
+    return mean, std
+
+
+def GxEInteractionMLP(hidden_dim: int = 8):
+    """Two-input MLP (standardized genetic_value, standardized
+    environment_value) -> pheno -- the Part B "full nonlinear surface"
+    model. Identical architecture to ScalarMLP, just called under its own
+    name here: ScalarMLP's docstring says the input is "always a single
+    standardized scalar", which stops being literally true the moment
+    n_in=2, so this thin wrapper keeps the name honest at the call site
+    instead of leaving that docstring silently wrong for this use.
+    """
+    return ScalarMLP(n_in=2, hidden_dim=hidden_dim, n_out=1)
